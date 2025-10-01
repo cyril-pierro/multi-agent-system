@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FastAPI Agent WebSocket Tester</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background-color: #f4f4f9; }
+        .container { max-width: 800px; margin: 0 auto; background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
+        h1 { color: #333; border-bottom: 2px solid #eee; padding-bottom: 10px; }
+        #connection-status { margin-bottom: 15px; padding: 10px; border-radius: 4px; font-weight: bold; }
+        .status-connected { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .status-disconnected { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        #message-input, #session-id-input, #host-input { width: 100%; padding: 10px; margin-bottom: 10px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; }
+        button { padding: 10px 15px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; transition: background-color 0.3s; }
+        button:hover { background-color: #0056b3; }
+        #output { background-color: #282c34; color: #fff; padding: 15px; border-radius: 4px; min-height: 200px; overflow-y: scroll; white-space: pre-wrap; margin-top: 20px; font-size: 0.9em; }
+        .log-line { margin-bottom: 5px; border-bottom: 1px dashed #444; padding-bottom: 5px; }
+        .log-status { color: #61afef; }
+        .log-completed { color: #98c379; }
+        .log-error { color: #e06c75; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Agent WebSocket Tester 🤖</h1>
+        <div id="connection-status" class="status-disconnected">Disconnected</div>
+
+        <h2>Connection Settings</h2>
+        <input type="text" id="host-input" value="ws://127.0.0.1:8000" placeholder="WebSocket Host (e.g., ws://localhost:8000)">
+        <input type="text" id="session-id-input" value="TEST_CLIENT_1" placeholder="Client/Session ID">
+        <button onclick="connectWebSocket()">Connect</button>
+        <button onclick="disconnectWebSocket()" disabled id="disconnect-btn">Disconnect</button>
+
+        <hr style="margin: 20px 0;">
+
+        <h2>Send Message</h2>
+        <input type="text" id="message-input" placeholder="Enter a business request (e.g., Q3 financial summary for Amazon)" disabled>
+        <button onclick="sendMessage()" disabled id="send-btn">Send</button>
+
+        <h2>Output Log</h2>
+        <div id="output">Waiting for connection...</div>
+    </div>
+
+    <script>
+        const hostInput = document.getElementById('host-input');
+        const sessionIdInput = document.getElementById('session-id-input');
+        const statusDiv = document.getElementById('connection-status');
+        const outputDiv = document.getElementById('output');
+        const messageInput = document.getElementById('message-input');
+        const sendBtn = document.getElementById('send-btn');
+        const disconnectBtn = document.getElementById('disconnect-btn');
+
+        let ws = null;
+
+        function log(message, className = '') {
+            const line = document.createElement('div');
+            line.className = 'log-line ' + className;
+            // Prepend timestamp
+            const time = new Date().toLocaleTimeString();
+            line.innerHTML = `[${time}] ${message}`;
+            outputDiv.prepend(line);
+        }
+
+        function updateStatus(isConnected) {
+            if (isConnected) {
+                statusDiv.textContent = `Connected to: ${ws.url}`;
+                statusDiv.className = 'status-connected';
+                messageInput.disabled = false;
+                sendBtn.disabled = false;
+                disconnectBtn.disabled = false;
+            } else {
+                statusDiv.textContent = 'Disconnected';
+                statusDiv.className = 'status-disconnected';
+                messageInput.disabled = true;
+                sendBtn.disabled = true;
+                disconnectBtn.disabled = true;
+            }
+        }
+
+        function connectWebSocket() {
+            if (ws) {
+                log('Already connected. Disconnect first.', 'log-error');
+                return;
+            }
+
+            const host = hostInput.value.trim();
+            const clientId = sessionIdInput.value.trim();
+            if (!host || !clientId) {
+                log('Host and Session ID are required.', 'log-error');
+                return;
+            }
+
+            const url = `${host}/ws/${clientId}`;
+            ws = new WebSocket(url);
+            
+            log(`Attempting to connect to: ${url}...`, 'log-status');
+
+            ws.onopen = () => {
+                log('✅ Connection established.', 'log-status');
+                updateStatus(true);
+            };
+
+            ws.onmessage = (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                
+                let logMessage = `[${data.state}] ${data.status}`;
+                let logClass = '';
+                
+                if (data.status === 'TASK_STARTED') {
+                    logMessage += `: Task **'${data.payload.initial_query}'** started. Process PID: ${data.payload.message.split(' ').slice(-1)[0]}`;
+                    logClass = 'log-status';
+                } else if (data.status === 'PROGRESS_UPDATE') {
+                    // --- NEW HANDLING FOR AGENT OUTPUT ---
+                    logMessage = `[AGENT STREAM] ${data.payload.message}`;
+                    logClass = 'log-status';
+                } else if (data.status === 'COMPLETED') {
+                    logMessage += `: Report generated! Scroll down for full output.`;
+                    logClass = 'log-completed';
+                    log('--- FULL REPORT (Markdown) ---');
+                    log(data.payload.report);
+                    log('-----------------------------');
+                } else if (data.status === 'CHAT_RESPONSE') {
+                    logMessage = `[${data.state} / ${data.payload.agent}] Chat Response: ${data.payload.response}`;
+                    logClass = 'log-status';
+                } else if (data.status === 'ERROR' || data.status === 'STREAM_ERROR') {
+                    logMessage += `: ${data.payload.message}`;
+                    logClass = 'log-error';
+                } else if (data.status === 'TICK' || data.status === 'CONNECTED') {
+                     // Still skip simple Ticks and CONNECTED messages for cleaner output
+                     return;
+                }
+                
+                log(logMessage.replace(/\*\*/g, '<b>').replace(/\*\*/g, '</b>'));
+
+            } catch (e) {
+                log(`Received non-JSON data or failed to parse: ${event.data}`, 'log-error');
+            }
+        };
+
+            ws.onclose = (event) => {
+                log(`❌ Connection closed. Code: ${event.code}`, 'log-error');
+                ws = null;
+                updateStatus(false);
+            };
+
+            ws.onerror = (error) => {
+                log(`🚨 WebSocket Error: ${error}`, 'log-error');
+            };
+        }
+
+        function disconnectWebSocket() {
+            if (ws) {
+                ws.close();
+            }
+        }
+
+        function sendMessage() {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                log('Cannot send: WebSocket is not open.', 'log-error');
+                return;
+            }
+            
+            const message = messageInput.value.trim();
+            if (!message) return;
+
+            // Send the raw text message
+            ws.send(message);
+            log(`➡️ Sent: ${message}`, 'log-status');
+            messageInput.value = ''; // Clear input after sending
+        }
+
+        // Initial status update
+        updateStatus(false);
+    </script>
+</body>
+</html>
