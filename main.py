@@ -9,11 +9,9 @@ from core.websocket import manager as connection_manager
 # Initialize FastAPI application
 app = FastAPI(title="Multi-Agent WebSocket Solver")
 
-# Initialize Redis Manager (assuming this is how it works in your setup)
 redis_state_manager = RedisStateManager()
 if not redis_state_manager.redis_client:
     print("\nFATAL: Redis connection failed. Please ensure Redis server is running.")
-    # Exit or handle error appropriately in a production app
 
 # Dictionary to hold the state for each client (TaskRunner instance)
 active_task_runners: dict[str, TaskRunner] = {}
